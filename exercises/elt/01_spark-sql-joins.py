@@ -1,5 +1,8 @@
 # Databricks notebook source
-# COMMAND ----------
+# /// script
+# [tool.databricks.environment]
+# environment_version = "2"
+# ///
 # MAGIC %md
 # MAGIC # Spark SQL Joins & Aggregations
 # MAGIC **Topic**: ELT | **Exercises**: 9 | **Total Time**: ~95 min
@@ -64,6 +67,7 @@
 # MAGIC %run ./setup/spark-sql-joins-setup
 
 # COMMAND ----------
+
 # MAGIC %md
 # MAGIC **Setup complete.** Exercise tables are in `db_code.spark_sql_joins` schema.
 # MAGIC Base tables (orders, customers, products, order_items) are in `db_code.elt` schema.
@@ -79,6 +83,7 @@
 # MAGIC - Ex 9 (hard): CUBE for all-combination subtotals, write to `joins_ex9_cube`
 
 # COMMAND ----------
+
 # MAGIC %md
 # MAGIC ## Exercise 1: Inner Join Orders with Customers
 # MAGIC **Difficulty**: Easy | **Time**: ~5 min
@@ -103,9 +108,26 @@
 
 # EXERCISE_KEY: spark_sql_joins_ex1
 # TODO: Inner join orders with customers and write to Delta table
-
+import pyspark.sql.functions as f
 # Your code here
 
+orders = spark.read.table("db_code.elt.orders")
+# display(orders)
+customersDF = spark.read.table("db_code.elt.customers")
+
+resultDF = orders.alias("o").join(customersDF.alias("c"),on="customer_id",how="inner")\
+            .select(
+                f.col("o.order_id"),
+                f.col("c.customer_id"),
+                f.col("o.amount"),
+                f.col("o.status"),
+                f.col("o.order_date"),
+                f.col("c.name"),
+                f.col("c.region"),
+                f.col("c.tier")
+            )
+
+resultDF.write.format("delta").mode("overwrite").saveAsTable("db_code.spark_sql_joins.joins_ex1_output")
 
 # COMMAND ----------
 
@@ -126,6 +148,7 @@ assert result.filter("customer_id IS NULL").count() == 0, \
 print("Exercise 1 passed!")
 
 # COMMAND ----------
+
 # MAGIC %md
 # MAGIC ## Exercise 2: Left Join with COALESCE for Null Handling
 # MAGIC **Difficulty**: Easy | **Time**: ~5 min
@@ -174,6 +197,7 @@ assert unknown_count > 0, "Expected some 'Unknown' names for orders with NULL cu
 print("Exercise 2 passed!")
 
 # COMMAND ----------
+
 # MAGIC %md
 # MAGIC ## Exercise 3: Anti-Join to Find Orphan Order Items
 # MAGIC **Difficulty**: Medium | **Time**: ~10 min
@@ -226,6 +250,7 @@ assert "unit_price" in result.columns, "Missing 'unit_price' column from order_i
 print("Exercise 3 passed!")
 
 # COMMAND ----------
+
 # MAGIC %md
 # MAGIC ## Exercise 4: Semi-Join to Find Customers Who Have Orders
 # MAGIC **Difficulty**: Medium | **Time**: ~10 min
@@ -279,6 +304,7 @@ assert result.count() == result.select("customer_id").distinct().count(), \
 print("Exercise 4 passed!")
 
 # COMMAND ----------
+
 # MAGIC %md
 # MAGIC ## Exercise 5: Self-Join to Find Same-Day Orders by Same Customer
 # MAGIC **Difficulty**: Medium | **Time**: ~10 min
@@ -332,6 +358,7 @@ assert bad_pairs == 0, f"Found {bad_pairs} rows where order_id_1 >= order_id_2 -
 print("Exercise 5 passed!")
 
 # COMMAND ----------
+
 # MAGIC %md
 # MAGIC ## Exercise 6: Multi-Table Join Chain (Orders + Customers + Products + Order Items)
 # MAGIC **Difficulty**: Medium | **Time**: ~15 min
@@ -392,6 +419,7 @@ if sample.count() > 0:
 print("Exercise 6 passed!")
 
 # COMMAND ----------
+
 # MAGIC %md
 # MAGIC ## Exercise 7: GROUP BY with HAVING to Find High-Value Customers
 # MAGIC **Difficulty**: Medium | **Time**: ~10 min
@@ -452,6 +480,7 @@ assert result.count() == result.select("customer_id").distinct().count(), \
 print("Exercise 7 passed!")
 
 # COMMAND ----------
+
 # MAGIC %md
 # MAGIC ## Exercise 8: ROLLUP for Hierarchical Subtotals by Region and Tier
 # MAGIC **Difficulty**: Hard | **Time**: ~15 min
@@ -520,6 +549,7 @@ assert grand_count > 0, "Grand total order_count should be positive"
 print("Exercise 8 passed!")
 
 # COMMAND ----------
+
 # MAGIC %md
 # MAGIC ## Exercise 9: CUBE for All-Combination Subtotals Across Region and Status
 # MAGIC **Difficulty**: Hard | **Time**: ~15 min
