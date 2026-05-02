@@ -1,5 +1,8 @@
 # Databricks notebook source
-# COMMAND ----------
+# /// script
+# [tool.databricks.environment]
+# environment_version = "2"
+# ///
 # MAGIC %md
 # MAGIC # MERGE Operations
 # MAGIC **Topic**: Delta Lake | **Exercises**: 9 | **Total Time**: ~90 min
@@ -34,6 +37,7 @@
 # MAGIC %run ./setup/merge-operations-setup
 
 # COMMAND ----------
+
 # MAGIC %md
 # MAGIC **Setup complete.** Exercise tables are in `{CATALOG}.{SCHEMA}` (merge_operations schema).
 # MAGIC Base tables (orders, customers) are in `{CATALOG}.{BASE_SCHEMA}` (delta_lake schema).
@@ -47,6 +51,7 @@
 # MAGIC - Ex 9 (hard): `merge_ex9_target` + `_source` - source has extra `discount_pct` column
 
 # COMMAND ----------
+
 # MAGIC %md
 # MAGIC ## Exercise 1: Basic Upsert
 # MAGIC **Difficulty**: Easy | **Time**: ~5 min
@@ -71,6 +76,21 @@
 # TODO: Write your MERGE INTO statement
 
 # Your code here
+sourcedf = spark.read.table("db_code.merge_operations.merge_ex1_source")
+display(sourcedf)
+
+targetdf = spark.read.table("db_code.merge_operations.merge_ex1_target")
+display(targetdf)
+
+
+spark.sql("""
+          merge into db_code.merge_operations.merge_ex1_target AS t 
+          using db_code.merge_operations.merge_ex1_source AS s 
+          on t.order_id = s.order_id
+          when matched then update set *
+          when not matched by target then insert *
+          """)
+
 
 
 # COMMAND ----------
@@ -87,6 +107,7 @@ assert result.filter("order_id = 'ORD-001'").select("amount").collect()[0][0] ==
 print("Exercise 1 passed!")
 
 # COMMAND ----------
+
 # MAGIC %md
 # MAGIC ## Exercise 2: Insert-Only Merge
 # MAGIC **Difficulty**: Easy | **Time**: ~5 min
@@ -111,7 +132,18 @@ print("Exercise 1 passed!")
 # TODO: Write your MERGE INTO statement
 
 # Your code here
+from delta.tables import DeltaTable
+# we are using DeltaTable.forName() only for target table , the reason is we want to modify the taarget table only and .merge(), .update,delete, optimize,vaccum,restore work on a deltaTable object only. 
+# if you also use the deltatable.forName() for source table also then it will also be a delta object but the .merge() function expects a dataframe not a delta table.
 
+target = DeltaTable.forName(spark,"db_code.merge_operations.merge_ex2_target")
+
+source = spark.table("db_code.merge_operations.merge_ex2_source")
+
+target.alias("t")\
+.merge(source.alias("s"), "t.order_id == s.order_id")\
+.whenNotMatchedInsertAll()\
+.execute() # with out this keyword the execution won't happen, it was a lazy transformation.
 
 # COMMAND ----------
 
@@ -128,6 +160,7 @@ assert ord001_status != "shipped", \
 print("Exercise 2 passed!")
 
 # COMMAND ----------
+
 # MAGIC %md
 # MAGIC ## Exercise 3: Update-Only Merge
 # MAGIC **Difficulty**: Easy | **Time**: ~5 min
@@ -152,7 +185,18 @@ print("Exercise 2 passed!")
 # TODO: Write your MERGE INTO statement
 
 # Your code here
+from delta.tables import DeltaTable
 
+target = DeltaTable.forName(spark,"db_code.merge_operations.merge_ex3_target")
+
+source = spark.read.table("db_code.merge_operations.merge_ex3_source")
+
+(
+    target.alias("t")\
+        .merge(source.alias("s"),"t.order_id == s.order_id")\
+            .whenMatchedUpdateAll()
+            .execute()
+)
 
 # COMMAND ----------
 
@@ -169,6 +213,7 @@ assert result.filter("order_id = 'ORD-004'").select("status").collect()[0][0] !=
 print("Exercise 3 passed!")
 
 # COMMAND ----------
+
 # MAGIC %md
 # MAGIC ## Exercise 4: Deduplicate Before Merge
 # MAGIC **Difficulty**: Medium | **Time**: ~10 min
@@ -196,7 +241,25 @@ print("Exercise 3 passed!")
 # TODO: Dedup the source, then MERGE
 
 # Your code here
+from delta.tables import DeltaTable
+from pyspark.sql.window import Window
+from pyspark.sql import functions as f
+target = DeltaTable.forName(spark,"db_code.merge_operations.merge_ex4_target")
 
+source = spark.read.table("db_code.merge_operations.merge_ex4_source")
+
+windowSpec = Window.partitionBy("order_id").orderBy(f.desc("updated_at"))
+
+sourceDeDup = source.withColumn("rn",f.row_number().over(windowSpec)).filter(f.col("rn") == 1).drop("rn")
+# display(sourceDeDup)
+
+(
+    target.alias("t")
+    .merge(sourceDeDup.alias("s"),"t.order_id == s.order_id")
+    .whenMatchedUpdateAll()
+    .whenNotMatchedInsertAll()
+    .execute()
+)
 
 # COMMAND ----------
 
@@ -211,6 +274,7 @@ assert result.filter("order_id = 'ORD-101'").count() == 1, "ORD-101 should be in
 print("Exercise 4 passed!")
 
 # COMMAND ----------
+
 # MAGIC %md
 # MAGIC ## Exercise 5: Conditional Merge - Only Update If Newer
 # MAGIC **Difficulty**: Medium | **Time**: ~10 min
@@ -237,6 +301,26 @@ print("Exercise 4 passed!")
 
 # Your code here
 
+from delta.tables import DeltaTable
+
+target = DeltaTable.forName(spark,"db_code.merge_operations.merge_ex5_target")
+source = spark.read.table("db_code.merge_operations.merge_ex5_source")
+# print(CATALOG)
+
+# display(source)
+
+
+# display(target)
+
+(
+    target.alias("t")\
+    .merge(source.alias("s"),"t.order_id==s.order_id")
+    .whenMatchedUpdateAll(condition="s.updated_at >= t.updated_at")
+    .whenNotMatchedInsertAll()
+    .execute()
+)
+
+
 
 # COMMAND ----------
 
@@ -257,6 +341,7 @@ assert result.filter("order_id = 'ORD-101'").count() == 1, "ORD-101 should be in
 print("Exercise 5 passed!")
 
 # COMMAND ----------
+
 # MAGIC %md
 # MAGIC ## Exercise 6: MERGE with DELETE Clause
 # MAGIC **Difficulty**: Medium | **Time**: ~10 min
@@ -283,6 +368,28 @@ print("Exercise 5 passed!")
 
 # Your code here
 
+from delta.tables import DeltaTable
+
+target = DeltaTable.forName(spark,"db_code.merge_operations.merge_ex6_target")
+
+targetDF = spark.read.table("db_code.merge_operations.merge_ex6_target")
+source = spark.read.table("db_code.merge_operations.merge_ex6_source")
+
+
+# display(source)
+
+# display(targetDF)
+
+
+(
+    target.alias("t")
+    .merge(source.alias("s"),"t.order_id == s.order_id")
+    .whenMatchedDelete(condition="s.status == 'cancelled' ")
+    .whenMatchedUpdateAll()
+    .whenNotMatchedInsertAll()
+    .execute()
+)
+
 
 # COMMAND ----------
 
@@ -298,6 +405,7 @@ assert result.filter("order_id = 'ORD-101'").count() == 1, "ORD-101 should be in
 print("Exercise 6 passed!")
 
 # COMMAND ----------
+
 # MAGIC %md
 # MAGIC ## Exercise 7: Multi-Condition MERGE
 # MAGIC **Difficulty**: Hard | **Time**: ~15 min
@@ -322,9 +430,21 @@ print("Exercise 6 passed!")
 
 # EXERCISE_KEY: merge_ex7
 # TODO: Write your solution here
-
+from delta.tables import DeltaTable
 # Your code here
+source = spark.read.table(f"{CATALOG}.{SCHEMA}.merge_ex7_source")
+# display(sourceDF)
 
+target = DeltaTable.forName(spark,f"{CATALOG}.{SCHEMA}.merge_ex7_target")
+
+(
+  target.alias("t")\
+    .merge(source.alias("s"),"s.order_id = t.order_id")\
+      .whenMatchedDelete(condition="s.status = 'cancelled' ")\
+        .whenMatchedUpdateAll(condition="s.updated_at > t.updated_at")\
+          .whenNotMatchedInsertAll()\
+            .execute()
+)
 
 # COMMAND ----------
 
@@ -346,6 +466,7 @@ assert result.filter("order_id = 'ORD-102'").count() == 1, "ORD-102 should be in
 print("Exercise 7 passed!")
 
 # COMMAND ----------
+
 # MAGIC %md
 # MAGIC ## Exercise 8: SCD Type 2 with MERGE
 # MAGIC **Difficulty**: Hard | **Time**: ~20 min
@@ -391,8 +512,107 @@ print("Exercise 7 passed!")
 # EXERCISE_KEY: merge_ex8
 # TODO: Write your solution here
 
-# Your code here
+from delta.tables import DeltaTable
+from pyspark.sql.functions import col,lit,current_date,to_date
 
+
+source = spark.read.table(f"{CATALOG}.{SCHEMA}.merge_ex8_source")
+print("***************** SOURCE DF ******************")
+display(source)
+target = DeltaTable.forName(spark,f"{CATALOG}.{SCHEMA}.merge_ex8_target")
+targetdf = target.toDF()
+print("************** TARGET DF *********************")
+display(targetdf)
+
+compareCols = source.columns
+
+# compareCols = ["name", "email", "region", "tier"]
+
+# creating a condition logic instead of hard-coding using the col names, in this way this code can be used to multiple dfs.
+# in line -25,26 it's a way of concatenating the col conditions.
+change_condition = None
+for col_name in compareCols:
+    col_changed = ~col(f"s.{col_name}").eqNullSafe(col(f"t.{col_name}"))
+    change_condition = col_changed if change_condition is None else (
+        change_condition | col_changed
+    )
+
+# retrieving only active records from target.
+current_targetDF = targetdf.filter(col("is_current"))
+
+# expiring the rows which are changed between source and target.
+expired_rows = source.alias("s")\
+                .join(current_targetDF.alias("t"),on="customer_id",how="inner")\
+                .filter(change_condition)\
+                .select(
+                    col("customer_id"),
+                    col("t.name"),
+                    col("t.email"),
+                    col("t.region"),
+                    col("t.tier"),
+                    lit(False).alias("is_current"), # converting the true to False.
+                    col("t.effective_start_date"),
+                    current_date().alias("effective_end_date"),
+                    lit("expire").alias("merge_action")
+                )
+
+print("************** Expired Rows DF *********************")
+display(expired_rows)
+
+# upsert_records
+
+# changed customer IDs
+changed_customer_ids = expired_rows.select("customer_id").distinct()
+
+# # new customer IDs
+new_customer_ids = source.alias("s")\
+                    .join(current_targetDF.alias("t"),on="customer_id",how="left_anti")\
+                    .select("customer_id")
+
+upsert_customer_ids = changed_customer_ids.unionByName(new_customer_ids).distinct()
+
+# retrieving the data from source for the upsert related IDs
+upsert_df = source.alias("s")\
+            .join(upsert_customer_ids.alias("u"),on="customer_id",how="inner")\
+            .select("customer_id","name","email","region","tier",
+                    lit(True).alias("is_current"),
+                    current_date().alias("effective_start_date"),
+                    to_date(lit("9999-12-31")).alias("effective_end_date"),
+                    lit("upsert").alias("merge_action")
+                    )
+print("***************** UPSERT DF ******************")
+display(upsert_df)
+
+# this DF helps in matched and notMatched records.
+stagedDF = expired_rows.unionByName(upsert_df)
+
+print("**************** STAGED DF ********************")
+display(stagedDF)
+
+
+(
+    target.alias("t")\
+    .merge(stagedDF.alias("s"),
+           condition="""
+           t.customer_id = s.customer_id
+           AND t.is_current = true
+           AND s.merge_action= 'expire'
+           """)\
+        .whenMatchedUpdate(set={
+                "is_current":lit(False),
+                "effective_end_date":current_date()
+        })\
+        .whenNotMatchedInsert(values={
+            "customer_id":"s.customer_id",
+            "name":"s.name",
+            "email":"s.email",
+            "region":"s.region",
+            "tier":"s.tier",
+            "is_current":"s.is_current",
+            "effective_start_date":"s.effective_start_date",
+            "effective_end_date":"s.effective_end_date",
+        }).execute()
+)
 
 # COMMAND ----------
 
@@ -424,6 +644,7 @@ print("Exercise 8 passed!")
 print("Idempotency: re-run your TODO cell then this cell. Assertions must still pass.")
 
 # COMMAND ----------
+
 # MAGIC %md
 # MAGIC ## Exercise 9: MERGE with Schema Evolution
 # MAGIC **Difficulty**: Hard | **Time**: ~15 min

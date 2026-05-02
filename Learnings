@@ -1,0 +1,29 @@
+# Learnings of delta lake concepts
+
+- DeltaTable.forName()  →  gives you a DeltaTable object
+                         has write methods: .merge(), .update(),
+                         .delete(), .optimize(), .vacuum()
+                         USE THIS when you need to WRITE
+
+- spark.table()         →  gives you a DataFrame object
+                         has read/transform methods only
+                         USE THIS when you only need to READ
+
+- order of the match functions are very important
+
+>     Always order WHEN MATCHED clauses from:
+>     MOST SPECIFIC (with conditions) → LEAST SPECIFIC (no condition)
+> 
+>     Most specific  →  .whenMatchedDelete(condition="...")
+>                       .whenMatchedUpdate(condition="...")
+>     Least specific →  .whenMatchedUpdateAll()   ← always last, no condition
+>                       .whenMatchedDeleteAll()   ← if used, always last
+
+- Join Syntax                          │ Duplicate join key columns?
+─────────────────────────────────────┼────────────────────────────
+on="column_name"  (string)           │ NO  — PySpark deduplicates ✅
+on=["col1","col2"] (list of strings) │ NO  — PySpark deduplicates ✅
+on=F.col("a.x") == F.col("b.x")     │ YES — both columns kept ❌
+on=df1.x == df2.x                    │ YES — both columns kept ❌
+
+- filter and where are used for data filtrations and both are identiical.
