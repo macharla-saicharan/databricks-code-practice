@@ -509,6 +509,227 @@ print("Exercise 7 passed!")
 
 # COMMAND ----------
 
+from delta.tables import DeltaTable
+from pyspark.sql.functions import col,to_date,lit,current_date
+
+
+sourceDF = spark.read.table(f"{CATALOG}.{SCHEMA}.merge_ex8_source")
+target = DeltaTable.forName(spark,f"{CATALOG}.{SCHEMA}.merge_ex8_target")
+# convert the delta table to a DF
+targetDF = target.toDF()
+
+# display(sourceDF)
+# display(targetDF)
+
+
+sourceColList = sourceDF.columns
+
+print(sourceColList)
+
+change_condition = None
+
+# eqNullSafe helps us to return either true/false when compared values of type NULL
+# without this when we compare values with Null data it will return Null eg Null == 'sai' -> Null, but with eqNullSafe it returns false.
+
+for colName in sourceColList:
+    col_changed = ~(col(f"s.{colName}").eqNullSafe(col(f"t.{colName}")))
+    change_condition = col_changed if change_condition is None else (
+        change_condition | col_changed
+    )
+
+current_TargetDF = targetdf.filter(col("is_current"))
+
+expiredRowsDF = sourceDF.alias("s")\
+                .join(current_TargetDF.alias("t"),on="customer_id",how="inner")\
+                .filter(change_condition)\
+                .select(
+                    col("customer_id"),
+                    col("t.email"),
+                    col("t.name"),
+                    col("t.region"),
+                    col("t.tier"),
+                    lit(False).alias("is_current"),
+                    col("t.effective_start_date").alias("effective_start_date"),
+                    lit(current_date()).alias("effective_end_date"),
+                    lit("expire").alias("merge_action")
+                )
+
+
+updatedCustIDs = expiredRowsDF.select("customer_id")
+newCustIDs = sourceDF.join(current_TargetDF,on="customer_id",how="left_anti").select("customer_id")
+
+
+# display(newCustIDs)
+
+unionDF = updatedCustIDs.union(newCustIDs)
+
+# display(upsertDF)
+
+
+
+upsertDF = sourceDF\
+            .join(unionDF,on="customer_id",how="inner")\
+            .select(
+                col("customer_id"),
+                col("name"),
+                col("email"),
+                col("region"),
+                col("tier"),
+                lit(True).alias("is_current"),
+                lit(current_date()).alias("effective_start_date"),
+                to_date(lit("9999-12-31")).alias("effective_end_date"),
+                lit("upsert").alias("merge_action")
+            )
+
+stagedDF = upsertDF.union(expiredRowsDF)
+
+display(stagedDF)
+
+
+target.alias("t")\
+    .merge(stagedDF.alias("s"),condition="""
+           s.customer_id=t.customer_id and t.is_current = 'true' and s.merge_action='expire'
+           """)\
+    .whenMatchedUpdate(set={
+        "is_current":lit(False),
+        "effective_end_date":current_date()
+    })\
+    .whenNotMatchedInsert(values={
+        "customer_id":col("s.customer_id"),
+        "name":col("s.name"),
+        "email":col("s.email"),
+        "region":col("s.region"),
+        "tier":col("s.tier"),
+        "is_current":col("s.is_current"),
+        "effective_start_date":col("s.effective_start_date"),
+        "effective_end_date":col("s.effective_end_date")
+    }).execute()
+
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC Attempt - 2
+
+# COMMAND ----------
+
+print(sourceDF.columns)
+print(targetDF.columns)
+
+commonCols = list(set(sourceDF.columns) & set(targetDF.columns))
+
+print(commonCols)
+
+# COMMAND ----------
+
+from delta.tables import DeltaTable
+from pyspark.sql.functions import col,to_date,current_date,lit
+
+
+
+
+# read the source and target , target as delta table to use merge operation
+sourceDF = spark.read.table(f"{CATALOG}.{SCHEMA}.merge_ex8_source")
+target = DeltaTable.forName(spark,f"{CATALOG}.{SCHEMA}.merge_ex8_target")
+targetDF = target.toDF()
+
+# build the dynamic change condition which can be used on any df with null safe check.
+change_condition = None
+
+columnsList = sourceDF.columns
+
+for colName in columnsList:
+    col_condition = ~(col(f"s.{colName}").eqNullSafe(col(f"t.{colName}")))
+    change_condition = col_condition if change_condition is None else (
+        change_condition | col_condition
+    )
+
+
+# take only current records from target df to compare with sourcedf .
+currentTargetDF = targetDF.filter(col("is_current"))
+
+# build the expired rows df.
+expiredRowsDF = sourceDF.alias("s")\
+                .join(current_TargetDF.alias("t"),on="customer_id",how="inner")\
+                .filter(change_condition)\
+                .select("customer_id",
+                        col("t.email"),
+                        col("t.name"),
+                        col("t.region"),
+                        col("t.tier"),
+                        lit(False).alias("is_current"),
+                        col("t.effective_start_date"),
+                        lit(current_date()).alias("effective_end_date"),
+                        lit("expire").alias("merge_action")
+                )
+# fetch the common IDs
+commonIDs = expiredRowsDF.select("customer_id")
+# fetch the new IDs
+newIDs = sourceDF.join(current_TargetDF,on="customer_id",how="left_anti").select("customer_id")
+# union both common and new IDs
+unionDF = commonIDs.union(newIDs)
+# build a upsertDF
+upsertDF = sourceDF.alias("s")\
+            .join(unionDF,on="customer_id",how="inner")\
+            .select("customer_id",
+                    col("s.email"),
+                    col("s.name"),
+                    col("s.region"),
+                    col("t.tier"),
+                    lit(True).alias("is_current"),
+                    current_date().alias("effective_start_date"),
+                    to_date(lit("9999-12-31")).alias("effective_end_date"),
+                    lit("upsert").alias("merge_action"))
+            
+
+# build a stageDF which has both expired rows and Union rows
+
+stagedDF = expiredRowsDF.union(upsertDF)
+
+
+
+# write the merge operation
+
+target.alias("t")\
+    .merge(stagedDF.alias("s"),condition="""
+           s.customer_id = t.customer_id
+           AND t.is_current = true
+           AND s.merge_action = 'expire'
+           """)\
+    .whenMatchedUpdate(set={
+        "is_current":lit(True),
+        "effective_end_date":current_date()
+    })\
+    .whenNotMatchedInsert(values={
+        "customer_id":col("s.customer_id"),
+        "name":col("s.name"),
+        "email":col("s.email"),
+        "region":col("s.region"),
+        "tier":col("s.tier"),
+        "is_current":col("s.is_current"),
+        "effective_start_date":col("s.effective_start_date"),
+        "effective_end_date":col("s.effective_end_date")
+    }).execute()
+
+# COMMAND ----------
+
+
+source = spark.read.table(f"{CATALOG}.{SCHEMA}.merge_ex8_source")
+# display(source)
+
+targetdf = spark.read.table(f"{CATALOG}.{SCHEMA}.merge_ex8_target")
+
+display(source)
+
+display(targetdf)
+
+# COMMAND ----------
+
+targetDF = spark.read.table(f"{CATALOG}.{SCHEMA}.merge_ex8_target")
+display(targetDF)
+
+# COMMAND ----------
+
 # EXERCISE_KEY: merge_ex8
 # TODO: Write your solution here
 
@@ -672,7 +893,88 @@ print("Idempotency: re-run your TODO cell then this cell. Assertions must still 
 # TODO: Write your solution here
 
 # Your code here
+# spark.conf.set("spark.databricks.delta.schema.autoMerge.enabled", "true")
+from delta.tables import DeltaTable
+from pyspark.sql.functions import col
 
+source = spark.read.table(f"{CATALOG}.{SCHEMA}.merge_ex9_source")
+# display(source)
+
+targetdf = spark.read.table(f"{CATALOG}.{SCHEMA}.merge_ex9_target")
+# display(targetdf)
+
+target = DeltaTable.forName(spark,f"{CATALOG}.{SCHEMA}.merge_ex9_target")
+
+(
+  target.alias("t").merge(
+    source.alias("s"), condition="t.order_id=s.order_id"
+  )\
+  .whenMatchedUpdateAll()\
+  .whenNotMatchedInsertAll()\
+  .execute()
+)
+
+
+# COMMAND ----------
+
+# spark.conf.get("spark.databricks.clusterUsageTags.sparkVersion")
+# or
+spark.version
+
+# COMMAND ----------
+
+from pyspark.sql.functions import col
+source = spark.read.table(f"{CATALOG}.{SCHEMA}.merge_ex9_source")
+source_casted = source.withColumn("amount", col("amount").cast("double")) \
+                      .withColumn("discount_pct", col("discount_pct").cast("double"))
+
+# COMMAND ----------
+
+spark.sql(f"""
+    ALTER TABLE {CATALOG}.{SCHEMA}.merge_ex9_target
+    SET TBLPROPERTIES ('delta.schemaAutoMerge.enabled' = 'true')
+""")
+
+# COMMAND ----------
+
+from delta.tables import DeltaTable
+
+# Load source and target
+source = spark.table(f"{CATALOG}.{SCHEMA}.merge_ex9_source")
+target = DeltaTable.forName(spark, f"{CATALOG}.{SCHEMA}.merge_ex9_target")
+
+# Standard upsert MERGE
+# Spark 4.1 / DBR 16 handles schema evolution automatically
+# On older runtimes, set spark.databricks.delta.schema.autoMerge.enabled = true before this
+(
+    target.alias("t")
+    .merge(
+        source_casted.alias("s"),
+        condition="t.order_id = s.order_id"   # correct business key for orders table
+    )
+    .whenMatchedUpdateAll()     # update all columns including discount_pct
+    .whenNotMatchedInsertAll()  # insert full row including discount_pct
+    .execute()
+)
+
+source_casted.printSchema()
+target.toDF().printSchema()
+
+# COMMAND ----------
+
+result = spark.table(f"{CATALOG}.{SCHEMA}.merge_ex9_target")
+result.printSchema()
+result.show()
+
+# COMMAND ----------
+
+spark.sql(f"""
+          MERGE with schema evolution into {CATALOG}.{SCHEMA}.merge_ex9_target AS t
+          USING {CATALOG}.{SCHEMA}.merge_ex9_source AS s 
+          ON s.order_id = t.order_id
+          when matched then update set *
+          when not matched then insert *
+          """)
 
 # COMMAND ----------
 
@@ -690,3 +992,8 @@ assert result.filter("order_id = 'ORD-002'").select("discount_pct").collect()[0]
     "ORD-002 should have null discount_pct (not in source)"
 
 print("Exercise 9 passed!")
+
+# COMMAND ----------
+
+# Check if Delta table property needs to be set
+spark.sql(f"DESCRIBE DETAIL {CATALOG}.{SCHEMA}.merge_ex9_target").select("properties").show(truncate=False)
