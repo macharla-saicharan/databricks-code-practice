@@ -1,5 +1,4 @@
 # Databricks notebook source
-# COMMAND ----------
 # MAGIC %md
 # MAGIC # Liquid Clustering
 # MAGIC **Topic**: Delta Lake | **Exercises**: 6 | **Checkpoints**: 1 | **Total Time**: ~70 min
@@ -33,6 +32,7 @@
 # MAGIC %run ./setup/liquid-clustering-setup
 
 # COMMAND ----------
+
 # MAGIC %md
 # MAGIC **Setup complete.** Exercise tables are in `{CATALOG}.{SCHEMA}` (liquid_clustering schema).
 # MAGIC Base tables (orders, customers) are in `{CATALOG}.{BASE_SCHEMA}` (delta_lake schema).
@@ -44,6 +44,7 @@
 # MAGIC - `lc_ex7_partitioned`: partitioned by `status` (for full migration)
 
 # COMMAND ----------
+
 # MAGIC %md
 # MAGIC ## Exercise 1: Create a Liquid Clustered Table
 # MAGIC **Difficulty**: Easy | **Time**: ~5 min
@@ -59,11 +60,28 @@
 
 # COMMAND ----------
 
+print(f"{CATALOG},{SCHEMA}")
+
+# COMMAND ----------
+
 # EXERCISE_KEY: lc_ex1
 # TODO: Create a liquid clustered table with CLUSTER BY (status)
-
+from pyspark.sql.functions import col
 # Your code here
+ordersDF = spark.table("db_code.delta_lake.orders").filter(col("order_id").isin('ORD-001', 'ORD-002', 'ORD-003', 'ORD-004', 'ORD-005'))
+display(ordersDF)
 
+spark.sql(f"""
+          create table {CATALOG}.{SCHEMA}.lc_ex1_orders
+          cluster by (status)
+          as
+          select * from db_code.delta_lake.orders
+          where order_id IN ('ORD-001', 'ORD-002', 'ORD-003', 'ORD-004', 'ORD-005')
+          """)
+
+# COMMAND ----------
+
+display(spark.sql(f"select * from {CATALOG}.{SCHEMA}.lc_ex1_orders"))
 
 # COMMAND ----------
 
@@ -79,6 +97,7 @@ assert "status" in clustering, f"Should be clustered by status, got {clustering}
 print("Exercise 1 passed!")
 
 # COMMAND ----------
+
 # MAGIC %md
 # MAGIC ## Exercise 2: Trigger Clustering with OPTIMIZE
 # MAGIC **Difficulty**: Easy | **Time**: ~5 min
@@ -99,7 +118,7 @@ print("Exercise 1 passed!")
 # TODO: Run OPTIMIZE to trigger liquid clustering
 
 # Your code here
-
+spark.sql(f"optimize {CATALOG}.{SCHEMA}.lc_ex2_orders")
 
 # COMMAND ----------
 
@@ -111,6 +130,7 @@ assert detail.numFiles <= 2, f"After OPTIMIZE, expected 1-2 files, got {detail.n
 print("Exercise 2 passed!")
 
 # COMMAND ----------
+
 # MAGIC %md
 # MAGIC ## Checkpoint 3: Verify Clustering Configuration
 # MAGIC **Time**: ~5 min
@@ -127,11 +147,15 @@ print("Exercise 2 passed!")
 
 # COMMAND ----------
 
+display(spark.sql(f"describe detail {CATALOG}.{SCHEMA}.lc_ex3_orders"))
+
+# COMMAND ----------
+
 # EXERCISE_KEY: lc_ex3
 # TODO: Run DESCRIBE DETAIL on lc_ex3_orders, then fill in what you observe
 
-clustering_col = ""    # Replace: the column name from clusteringColumns (e.g., "status")
-num_files = 0          # Replace: numFiles after optimization
+clustering_col = "status"    # Replace: the column name from clusteringColumns (e.g., "status")
+num_files = 1         # Replace: numFiles after optimization
 
 spark.sql(f"""
     CREATE OR REPLACE TABLE {CATALOG}.{SCHEMA}.lc_ex3_report AS
@@ -149,6 +173,7 @@ assert row.num_files >= 1, f"Should have at least 1 file, got {row.num_files}"
 print("Exercise 3 passed!")
 
 # COMMAND ----------
+
 # MAGIC %md
 # MAGIC ## Exercise 4: Migrate from ZORDER to Liquid Clustering
 # MAGIC **Difficulty**: Medium | **Time**: ~10 min
@@ -172,7 +197,9 @@ print("Exercise 3 passed!")
 # TODO: Add liquid clustering to replace ZORDER
 
 # Your code here
+# display(spark.sql(f"describe detail {CATALOG}.{SCHEMA}.lc_ex4_orders"))
 
+spark.sql(f"alter table {CATALOG}.{SCHEMA}.lc_ex4_orders cluster by (status)")
 
 # COMMAND ----------
 
@@ -186,6 +213,7 @@ assert "status" in clustering, f"Should be clustered by status, got {clustering}
 print("Exercise 4 passed!")
 
 # COMMAND ----------
+
 # MAGIC %md
 # MAGIC ## Exercise 5: Change Cluster Keys (Metadata-Only)
 # MAGIC **Difficulty**: Medium | **Time**: ~15 min
@@ -205,16 +233,27 @@ print("Exercise 4 passed!")
 
 # COMMAND ----------
 
+# display(spark.sql(f"describe detail {CATALOG}.{SCHEMA}.lc_ex5_orders"))
+
+# spark.sql(f"alter table {CATALOG}.{SCHEMA}.lc_ex5_orders cluster by (order_date)")
+
+display(spark.sql(f"describe detail {CATALOG}.{SCHEMA}.lc_ex5_orders"))
+
+# spark.sql(f"optimize {CATALOG}.{SCHEMA}.lc_ex5_orders")
+
+
+# COMMAND ----------
+
 # EXERCISE_KEY: lc_ex5
 # TODO: Check files, change key, check files again (same!), OPTIMIZE, check files (compacted!)
 
-files_before_alter = 0   # Replace: numFiles before ALTER TABLE
+files_before_alter = 10   # Replace: numFiles before ALTER TABLE
 # Write your ALTER TABLE CLUSTER BY here
 
-files_after_alter = 0    # Replace: numFiles after ALTER (should equal files_before_alter!)
+files_after_alter = 10    # Replace: numFiles after ALTER (should equal files_before_alter!)
 # Write your OPTIMIZE here
 
-files_after_optimize = 0 # Replace: numFiles after OPTIMIZE
+files_after_optimize = 1 # Replace: numFiles after OPTIMIZE
 
 spark.sql(f"""
     CREATE OR REPLACE TABLE {CATALOG}.{SCHEMA}.lc_ex5_proof AS
@@ -241,6 +280,7 @@ assert proof.files_after_optimize <= 2, \
 print("Exercise 5 passed! ALTER TABLE was metadata-only, OPTIMIZE did the actual rewrite.")
 
 # COMMAND ----------
+
 # MAGIC %md
 # MAGIC ## Exercise 6: Multi-Column Cluster Keys
 # MAGIC **Difficulty**: Medium | **Time**: ~10 min
@@ -260,7 +300,13 @@ print("Exercise 5 passed! ALTER TABLE was metadata-only, OPTIMIZE did the actual
 # TODO: Create a table with multi-column liquid clustering
 
 # Your code here
-
+spark.sql(f"""
+          create table {CATALOG}.{SCHEMA}.lc_ex6_orders
+          cluster by (status,customer_id)
+          as
+          select * from db_code.delta_lake.orders
+          where order_id IN ('ORD-001', 'ORD-002', 'ORD-003', 'ORD-004', 'ORD-005')
+          """)
 
 # COMMAND ----------
 
@@ -276,6 +322,7 @@ assert "customer_id" in clustering, f"Should include customer_id in clustering, 
 print("Exercise 6 passed!")
 
 # COMMAND ----------
+
 # MAGIC %md
 # MAGIC ## Exercise 7: Migrate Partitioned Table to Liquid Clustering
 # MAGIC **Difficulty**: Hard | **Time**: ~20 min
@@ -303,7 +350,12 @@ print("Exercise 6 passed!")
 # TODO: Create new clustered table, copy data from partitioned, OPTIMIZE
 
 # Your code here
-
+spark.sql(f"""
+          create table {CATALOG}.{SCHEMA}.lc_ex7_clustered
+          cluster by (status)
+          as
+          select * from {CATALOG}.{SCHEMA}.lc_ex7_partitioned
+          """)
 
 # COMMAND ----------
 
