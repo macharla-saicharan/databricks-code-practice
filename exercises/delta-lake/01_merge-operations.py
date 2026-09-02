@@ -831,7 +831,7 @@ display(stagedDF)
             "tier":"s.tier",
             "is_current":"s.is_current",
             "effective_start_date":"s.effective_start_date",
-            "effective_end_date":"s.effective_end_date",
+            "effective_end_date":"s.effective_end_date"
         }).execute()
 )
 
@@ -997,3 +997,92 @@ print("Exercise 9 passed!")
 
 # Check if Delta table property needs to be set
 spark.sql(f"DESCRIBE DETAIL {CATALOG}.{SCHEMA}.merge_ex9_target").select("properties").show(truncate=False)
+
+# COMMAND ----------
+
+from delta.tables import DeltaTable
+from pyspark.sql.functions import col,lit,current_date
+
+source = spark.table(f"{CATALOG}.{SCHEMA}.merge_ex8_source")
+
+target = DeltaTable.forName(spark,f"{CATALOG}.{SCHEMA}.merge_ex8_target")
+
+targetDF = target.toDF()
+
+# dynamic change condition
+
+colsList = source.columns
+
+change_cnd = None
+
+for col_name in colsList:
+
+    col_cnd = ~col(f"s.{col_name}").eqNullSafe(col(f"t.{col_name}"))
+
+    change_cnd = col_cnd if change_cnd is None else change_cnd | col_cnd
+
+# current target df, to avoid explode while joining
+currentTargetDF = targetDF.filter(col("is_current"))
+# expired rows
+
+expiredRowsDF = currentTargetDF.alias("t")\
+                .join(source.alias("s"),on="customer_id",how="inner")\
+                .filter(change_cnd)\
+                .select(
+                    col("customer_id"),
+                    col("t.name"),
+                    col("t.email"),
+                    col("t.region"),
+                    col("t.tier"),
+                    lit(False).alias("is_current"),
+                    col("t.effective_start_date"),
+                    lit(current_date()).alias("effective_end_date"),
+                    lit("expire").alias("merge_action")
+                               
+                )
+# upsert rows
+
+updatedRows = expiredRowsDF.select("customer_id").distinct()
+
+newRecords = source.alias("s")\
+            .join(currentTargetDF.alias("t"),on="customer_id",how="left_anti")\
+            .select("customer_id")
+
+upsertRows = updatedRows.union(newRecords)
+
+upsertDF = source.alias("s")\
+            .join(upsertRows.alias("t"),on="customer_id",how="inner")\
+            .select(
+                "customer_id","name","email","region","tier",
+                lit(True).alias("is_current"),
+                lit(current_date()).alias("effective_start_date"),
+                lit("9999-12-12").alias("effective_end_date"),
+                lit("upsert").alias("merge_action")
+
+
+            )
+
+# staged DF
+stagedDF = expiredRowsDF.union(upsertDF)
+# merge operation
+
+target.alias("t")\
+    .merge(stagedDF.alias("s"),condition="""
+           t.customer_id = s.customer_id
+           AND t.is_current = true
+           AND s.merge_action = 'expire'
+           """)\
+    .whenMatchedUpdate(set={
+        "is_current" :lit(False),
+        "effective_end_date":current_date()
+    })\
+    .whenNotMatchedInsert(values={
+            "customer_id":"s.customer_id",
+            "name":"s.name",
+            "email":"s.email",
+            "region":"s.region",
+            "tier":"s.tier",
+            "is_current":"s.is_current",
+            "effective_start_date":"s.effective_start_date",
+            "effective_end_date":"s.effective_end_date"     
+    }).execute()

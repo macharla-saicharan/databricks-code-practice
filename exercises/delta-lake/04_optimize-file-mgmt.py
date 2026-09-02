@@ -128,7 +128,9 @@ dt = DeltaTable.forName(spark,f"{CATALOG}.{SCHEMA}.opt_ex2_orders")
 dt.optimize().executeCompaction()
 
 
+
 # COMMAND ----------
+
 
 df_after_optimize = spark.sql(f"DESCRIBE DETAIL {CATALOG}.{SCHEMA}.opt_ex2_orders")
 display(df_after_optimize.select("name","numFiles","sizeInBytes"))
